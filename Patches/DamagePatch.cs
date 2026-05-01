@@ -1,10 +1,8 @@
 using System;
 using System.Reflection;
-using System.Threading.Tasks;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
-using MegaCrit.Sts2.Core.Entities.Creatures;
 
 namespace ExampleMod.Patches;
 
@@ -29,8 +27,30 @@ public class CombatStartDamagePatch
 }
 
 /// <summary>
-/// 简化版：直接在战斗结束时显示统计
-/// 使用NCombatRoom的结束方法作为触发点
+/// 每帧检测Patch - 检测回合切换并在回合结束时显示伤害统计
+/// </summary>
+[HarmonyPatch(typeof(NCombatRoom), "_Process")]
+public class CombatProcessDamagePatch
+{
+    static void Postfix(NCombatRoom __instance, double delta)
+    {
+        try
+        {
+            DamageTracker.OnProcess();
+        }
+        catch (Exception ex)
+        {
+            // 避免频繁打印错误影响性能
+            if (DamageTracker._turnCount == 0)
+            {
+                GD.PrintErr($"[CombatProcessDamagePatch] 错误: {ex.Message}");
+            }
+        }
+    }
+}
+
+/// <summary>
+/// 战斗结束Patch - 清理状态
 /// </summary>
 [HarmonyPatch(typeof(NCombatRoom), "EndCombat")]
 public class CombatEndDamagePatch
@@ -39,8 +59,8 @@ public class CombatEndDamagePatch
     {
         try
         {
-            DamageTracker.OnPlayerTurnEnd();
-            GD.Print("[DamagePatch] 战斗结束，显示最终伤害统计");
+            DamageTracker.OnCombatEnd();
+            GD.Print("[DamagePatch] 战斗结束，伤害统计已清理");
         }
         catch (Exception ex)
         {

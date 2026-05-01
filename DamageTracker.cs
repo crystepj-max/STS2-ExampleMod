@@ -4,53 +4,106 @@ using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using BaseLib.Utils;
+using MegaCrit.Sts2.Core.Combat;
 
 namespace ExampleMod;
 
 /// <summary>
-/// 伤害追踪器 - 记录玩家造成的伤害并在回合结束时显示统计
+/// 伤害追踪器 - 记录玩家每回合造成的伤害并在回合结束时显示统计
 /// </summary>
 public static class DamageTracker
 {
     // 伤害记录
-    private static Dictionary<int, int> _enemyStartHp = new(); // 使用creature ID作为key
+    private static Dictionary<int, int> _enemyHpAtTurnStart = new();
     private static int _totalDamageThisCombat = 0;
     private static int _turnCount = 0;
     private static NCombatRoom? _currentCombatRoom = null;
+    private static CombatSide _lastSide = CombatSide.Enemy; // 初始设为Enemy，这样第一个玩家回合开始时就会触发记录
+    private static bool _isInitialized = false;
     
     /// <summary>
     /// 战斗开始时初始化
     /// </summary>
     public static void OnCombatStart(NCombatRoom combatRoom)
     {
-        _enemyStartHp.Clear();
+        _enemyHpAtTurnStart.Clear();
         _totalDamageThisCombat = 0;
         _turnCount = 0;
         _currentCombatRoom = combatRoom;
+        _lastSide = CombatSide.Enemy;
+        _isInitialized = true;
         
-        GD.Print($"[DamageTracker] 战斗开始");
+        GD.Print("[DamageTracker] 战斗开始，等待玩家回合...");
     }
     
     /// <summary>
-    /// 玩家回合结束时显示伤害统计
+    /// 每帧检查回合状态变化
     /// </summary>
-    public static void OnPlayerTurnEnd()
+    public static void OnProcess()
+    {
+        if (!_isInitialized || _currentCombatRoom == null) return;
+        
+        // 获取当前战斗状态
+        var combatState = BetaMainCompatibility.Creature_.WrappedCombatState(_currentCombatRoom.Player?.Creature);
+        if (combatState == null) return;
+        
+        var currentSide = combatState.CurrentSide;
+        
+        // 检测回合切换：玩家回合结束（Player -> Enemy）
+        if (_lastSide == CombatSide.Player && currentSide == CombatSide.Enemy)
+        {
+            OnPlayerTurnEnd();
+        }
+        
+        // 检测回合切换：玩家回合开始（Enemy -> Player）
+        if (_lastSide == CombatSide.Enemy && currentSide == CombatSide.Player)
+        {
+            OnPlayerTurnStart(combatState);
+        }
+        
+        _lastSide = currentSide;
+    }
+    
+    /// <summary>
+    /// 玩家回合开始时记录敌人初始HP
+    /// </summary>
+    private static void OnPlayerTurnStart(CombatStateWrapper combatState)
+    {
+        _turnCount++;
+        _enemyHpAtTurnStart.Clear();
+        
+        // 记录所有敌人的当前HP
+        foreach (var enemy in combatState.Enemies)
+        {
+            if (enemy.IsAlive)
+            {
+                int id = enemy.GetHashCode();
+                int hp = enemy.CurrentHp;
+                _enemyHpAtTurnStart[id] = hp;
+                GD.Print($"[DamageTracker] 回合 {_turnCount} 开始 - 记录敌人 ID={id}, HP={hp}");
+            }
+        }
+        
+        GD.Print($"[DamageTracker] ========== 回合 {_turnCount} 开始 ========== ");
+    }
+    
+    /// <summary>
+    /// 玩家回合结束时计算并显示伤害统计
+    /// </summary>
+    private static void OnPlayerTurnEnd()
     {
         if (_currentCombatRoom == null) return;
         
-        _turnCount++;
-        
-        // 计算本回合伤害（通过敌人HP变化）
+        // 计算本回合伤害（敌人HP减少量）
         int turnDamage = CalculateTurnDamage();
         _totalDamageThisCombat += turnDamage;
         
-        GD.Print($"[DamageTracker] 回合 {_turnCount} 结束，本回合伤害: {turnDamage}, 总伤害: {_totalDamageThisCombat}");
+        GD.Print($"[DamageTracker] ========== 回合 {_turnCount} 结束 ========== ");
+        GD.Print($"[DamageTracker] 本回合伤害: {turnDamage}, 总伤害: {_totalDamageThisCombat}");
         
         // 显示伤害统计
         ShowDamageStats(turnDamage);
-        
-        // 更新敌人初始HP（用于下一回合计算）
-        UpdateEnemyStartHp();
     }
     
     /// <summary>
@@ -60,79 +113,30 @@ public static class DamageTracker
     {
         int totalDamage = 0;
         
-        // 遍历所有敌人，计算HP变化
-        // 由于我们无法直接获取CombatState，使用记录的数据
-        foreach (var kvp in _enemyStartHp)
+        if (_currentCombatRoom == null) return 0;
+        
+        var combatState = BetaMainCompatibility.Creature_.WrappedCombatState(_currentCombatRoom.Player?.Creature);
+        if (combatState == null) return 0;
+        
+        // 遍历敌人，计算HP变化
+        foreach (var enemy in combatState.Enemies)
         {
-            int startHp = kvp.Value;
-            // 假设敌人死亡则伤害=初始HP
-            // 这里简化处理，实际伤害需要追踪
+            int id = enemy.GetHashCode();
             
-            GD.Print($"[DamageTracker] 敌人ID {kvp.Key} 初始HP: {startHp}");
-        }
-        
-        // 简化：返回一个估算值
-        // 实际实现需要更复杂的追踪
-        return totalDamage;
-    }
-    
-    /// <summary>
-    /// 更新敌人初始HP
-    /// </summary>
-    private static void UpdateEnemyStartHp()
-    {
-        // 清空并重新记录存活敌人的当前HP
-        _enemyStartHp.Clear();
-        
-        if (_currentCombatRoom == null) return;
-        
-        // 遍历场景树查找敌人
-        // 使用递归查找所有Creature节点
-        FindAndRecordEnemies(_currentCombatRoom);
-    }
-    
-    /// <summary>
-    /// 递归查找敌人并记录HP
-    /// </summary>
-    private static void FindAndRecordEnemies(Node node)
-    {
-        foreach (var child in node.GetChildren())
-        {
-            // 检查节点类型名称
-            if (child.GetType().Name == "Creature")
+            if (_enemyHpAtTurnStart.TryGetValue(id, out int startHp))
             {
-                try
+                int currentHp = enemy.IsAlive ? enemy.CurrentHp : 0;
+                int damage = startHp - currentHp;
+                
+                if (damage > 0)
                 {
-                    // 使用反射获取Side属性
-                    var sideProp = child.GetType().GetProperty("Side");
-                    var currentHpProp = child.GetType().GetProperty("CurrentHp");
-                    var isAliveProp = child.GetType().GetProperty("IsAlive");
-                    
-                    if (sideProp != null && currentHpProp != null && isAliveProp != null)
-                    {
-                        var side = sideProp.GetValue(child);
-                        var currentHp = currentHpProp.GetValue(child);
-                        var isAlive = isAliveProp.GetValue(child);
-                        
-                        // 检查是否是敌人（Side != Player）
-                        if (side != null && side.ToString() == "Enemy" && isAlive is bool alive && alive)
-                        {
-                            int hp = Convert.ToInt32(currentHp);
-                            int id = child.GetHashCode(); // 使用HashCode作为ID
-                            _enemyStartHp[id] = hp;
-                            GD.Print($"[DamageTracker] 记录敌人 ID={id}, HP={hp}");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    GD.PrintErr($"[DamageTracker] 获取敌人信息失败: {ex.Message}");
+                    totalDamage += damage;
+                    GD.Print($"[DamageTracker] 敌人 ID={id}: {startHp} -> {currentHp}, 伤害={damage}");
                 }
             }
-            
-            // 递归查找子节点
-            FindAndRecordEnemies(child);
         }
+        
+        return totalDamage;
     }
     
     /// <summary>
@@ -142,31 +146,38 @@ public static class DamageTracker
     {
         if (_currentCombatRoom == null) return;
         
-        // 创建标签
+        // 移除旧的标签（如果存在）
+        var oldLabel = _currentCombatRoom.FindChild("DamageStatsLabel", true, false);
+        if (oldLabel != null)
+        {
+            oldLabel.QueueFree();
+        }
+        
+        // 创建新标签
         var label = new Label();
         label.Name = "DamageStatsLabel";
         
         // 设置样式
         var settings = new LabelSettings();
         settings.FontColor = Colors.Yellow;
-        settings.FontSize = 24;
+        settings.FontSize = 28;
         settings.OutlineColor = Colors.Black;
-        settings.OutlineSize = 2;
+        settings.OutlineSize = 3;
         label.LabelSettings = settings;
         
         // 设置文本
-        string statsText = $"⚔️ 回合 {_turnCount}\n总伤害: {_totalDamageThisCombat}";
+        string statsText = $"回合 {_turnCount}\n本回合伤害: {turnDamage}\n总伤害: {_totalDamageThisCombat}";
         label.Text = statsText;
         label.HorizontalAlignment = HorizontalAlignment.Center;
         label.VerticalAlignment = VerticalAlignment.Center;
         
-        // 设置位置 - 屏幕中央偏下
+        // 设置位置 - 屏幕右上角
         var viewport = _currentCombatRoom.GetViewport();
         if (viewport != null)
         {
             var screenSize = viewport.GetVisibleRect().Size;
-            label.Position = new Vector2(screenSize.X / 2 - 100, screenSize.Y / 2 + 100);
-            label.Size = new Vector2(200, 50);
+            label.Position = new Vector2(screenSize.X - 220, 100);
+            label.Size = new Vector2(200, 80);
         }
         
         // 添加到场景
@@ -174,16 +185,28 @@ public static class DamageTracker
         
         GD.Print($"[DamageTracker] 显示伤害统计: {statsText}");
         
-        // 3秒后移除
-        var timer = _currentCombatRoom.GetTree().CreateTimer(3.0);
+        // 2秒后移除（比回合切换间隔短）
+        var timer = _currentCombatRoom.GetTree().CreateTimer(2.0);
         timer.Timeout += () =>
         {
             try
             {
-                label.QueueFree();
-                GD.Print($"[DamageTracker] 伤害统计已移除");
+                if (label != null && IsInstanceValid(label))
+                {
+                    label.QueueFree();
+                }
             }
             catch { }
         };
+    }
+    
+    /// <summary>
+    /// 战斗结束时清理
+    /// </summary>
+    public static void OnCombatEnd()
+    {
+        GD.Print($"[DamageTracker] 战斗结束 - 总回合数: {_turnCount}, 总伤害: {_totalDamageThisCombat}");
+        _isInitialized = false;
+        _currentCombatRoom = null;
     }
 }
