@@ -1,0 +1,11 @@
+{
+  "id": "ExampleMod",
+  "name": "Example Mod",
+  "author": "松哥",
+  "description": "示例mod项目模板 - 包含一张基础攻击牌",
+  "version": "v1.0.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": ["BaseLib"],
+  "affects_gameplay": true
+}

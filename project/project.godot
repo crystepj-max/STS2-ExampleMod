@@ -1,0 +1,14 @@
+; Engine configuration file.
+config_version=5
+
+[application]
+
+config/name="ExampleMod"
+config/features=PackedStringArray("4.5", "Mono")
+
+[autoload]
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
