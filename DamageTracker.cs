@@ -24,7 +24,7 @@ public static class DamageTracker
     private static NCombatRoom? _currentCombatRoom = null;
     private static CombatSide _lastSide = CombatSide.Enemy;
     private static bool _isInitialized = false;
-    private static CombatStateWrapper? _lastCombatState = null;
+    private static GodotObject? _cachedCreatureObj = null;
     
     /// <summary>
     /// 战斗开始时初始化
@@ -37,9 +37,31 @@ public static class DamageTracker
         _currentCombatRoom = combatRoom;
         _lastSide = CombatSide.Enemy;
         _isInitialized = true;
-        _lastCombatState = null;
+        _cachedCreatureObj = null;
         
-        GD.Print("[DamageTracker] 战斗开始，等待玩家回合...");
+        // 预先查找一个Creature节点
+        _cachedCreatureObj = FindFirstCreatureNode(combatRoom);
+        
+        GD.Print($"[DamageTracker] 战斗开始，Creature: {_cachedCreatureObj?.GetType().Name ?? "null"}");
+    }
+    
+    /// <summary>
+    /// 从场景树中找到第一个Creature节点
+    /// </summary>
+    private static GodotObject? FindFirstCreatureNode(Node node)
+    {
+        foreach (var child in node.GetChildren())
+        {
+            // 检查类型名称
+            if (child.GetType().Name == "Creature")
+            {
+                return child;
+            }
+            // 递归查找
+            var found = FindFirstCreatureNode(child);
+            if (found != null) return found;
+        }
+        return null;
     }
     
     /// <summary>
@@ -47,49 +69,40 @@ public static class DamageTracker
     /// </summary>
     public static void OnProcess()
     {
-        if (!_isInitialized || _currentCombatRoom == null) return;
+        if (!_isInitialized || _currentCombatRoom == null || _cachedCreatureObj == null) return;
         
-        // 从场景树获取任意Creature来获取CombatState
-        var creature = FindFirstCreature(_currentCombatRoom);
-        if (creature == null) return;
-        
-        var combatState = BetaMainCompatibility.Creature_.WrappedCombatState(creature);
-        if (combatState == null) return;
-        
-        var currentSide = combatState.CurrentSide;
-        
-        // 检测回合切换：玩家回合结束（Player -> Enemy）
-        if (_lastSide == CombatSide.Player && currentSide == CombatSide.Enemy)
+        try
         {
-            OnPlayerTurnEnd(combatState);
-        }
-        
-        // 检测回合切换：玩家回合开始（Enemy -> Player）
-        if (_lastSide == CombatSide.Enemy && currentSide == CombatSide.Player)
-        {
-            OnPlayerTurnStart(combatState);
-        }
-        
-        _lastSide = currentSide;
-        _lastCombatState = combatState;
-    }
-    
-    /// <summary>
-    /// 从场景树中找到第一个Creature
-    /// </summary>
-    private static Creature? FindFirstCreature(Node node)
-    {
-        foreach (var child in node.GetChildren())
-        {
-            if (child.GetType() == typeof(Creature) || child.GetType().IsSubclassOf(typeof(Creature)))
+            // 使用 BetaMainCompatibility 获取 CombatState
+            // CombatState.Get 接受 object? 参数
+            var combatStateObj = BetaMainCompatibility.Creature_.CombatState.Get(_cachedCreatureObj);
+            if (combatStateObj == null) return;
+            
+            var combatState = new CombatStateWrapper(combatStateObj);
+            var currentSide = combatState.CurrentSide;
+            
+            // 检测回合切换：玩家回合结束（Player -> Enemy）
+            if (_lastSide == CombatSide.Player && currentSide == CombatSide.Enemy)
             {
-                return child as Creature;
+                OnPlayerTurnEnd(combatState);
             }
-            // 递归查找
-            var found = FindFirstCreature(child);
-            if (found != null) return found;
+            
+            // 检测回合切换：玩家回合开始（Enemy -> Player）
+            if (_lastSide == CombatSide.Enemy && currentSide == CombatSide.Player)
+            {
+                OnPlayerTurnStart(combatState);
+            }
+            
+            _lastSide = currentSide;
         }
-        return null;
+        catch (Exception ex)
+        {
+            // 只在第一回合打印错误
+            if (_turnCount == 0)
+            {
+                GD.PrintErr($"[DamageTracker] OnProcess错误: {ex.Message}");
+            }
+        }
     }
     
     /// <summary>
@@ -108,11 +121,11 @@ public static class DamageTracker
                 int id = enemy.GetHashCode();
                 int hp = enemy.CurrentHp;
                 _enemyHpAtTurnStart[id] = hp;
-                GD.Print($"[DamageTracker] 回合 {_turnCount} 开始 - 敌人 HP={hp}");
             }
         }
         
         GD.Print($"[DamageTracker] ========== 回合 {_turnCount} 开始 ========== ");
+        GD.Print($"[DamageTracker] 记录 {_enemyHpAtTurnStart.Count} 个敌人HP");
     }
     
     /// <summary>
@@ -151,13 +164,7 @@ public static class DamageTracker
                 if (damage > 0)
                 {
                     totalDamage += damage;
-                    GD.Print($"[DamageTracker] 敌人: {startHp} -> {currentHp}, 伤害={damage}");
                 }
-            }
-            else if (!enemy.IsAlive)
-            {
-                // 敌人本回合被杀死但之前没记录（可能是新召唤的敌人被击杀）
-                GD.Print($"[DamageTracker] 敌人死亡（未记录初始HP）");
             }
         }
         
@@ -233,5 +240,6 @@ public static class DamageTracker
         GD.Print($"[DamageTracker] 战斗结束 - 总回合数: {_turnCount}, 总伤害: {_totalDamageThisCombat}");
         _isInitialized = false;
         _currentCombatRoom = null;
+        _cachedCreatureObj = null;
     }
 }
