@@ -41,7 +41,7 @@ public class CombatProcessDamagePatch
         catch (Exception ex)
         {
             // 避免频繁打印错误影响性能
-            if (DamageTracker._turnCount == 0)
+            if (DamageTracker.TurnCount == 0)
             {
                 GD.PrintErr($"[CombatProcessDamagePatch] 错误: {ex.Message}");
             }
